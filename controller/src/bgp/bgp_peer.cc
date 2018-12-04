@@ -2026,11 +2026,26 @@ BgpAttrPtr BgpPeer::GetMpNlriNexthop(BgpMpNlri *nlri, BgpAttrPtr attr) {
         }
     } else if (nlri->afi == BgpAf::L2Vpn) {
         if (nlri->safi == BgpAf::EVpn) {
-            Ip4Address::bytes_type bt = { { 0 } };
-            copy(nlri->nexthop.begin(),
-                nlri->nexthop.begin() + sizeof(bt), bt.begin());
-            addr = Ip4Address(bt);
-            update_nh = true;
+            if (nlri->nexthop.size() == Address::kMaxV4Bytes) {
+                Ip4Address::bytes_type bt = { { 0 } };
+                copy(nlri->nexthop.begin(),
+                    nlri->nexthop.begin() + sizeof(bt), bt.begin());
+                addr = Ip4Address(bt);
+                update_nh = true;
+            } else if (nlri->nexthop.size() == Address::kMaxV6Bytes) {
+                Ip6Address::bytes_type bt = { { 0 } };
+                copy(nlri->nexthop.begin(),
+                    nlri->nexthop.begin() + sizeof(bt), bt.begin());
+                Ip6Address v6_addr(bt);
+                if (v6_addr.is_v4_mapped()) {
+                    addr = Address::V4FromV4MappedV6(v6_addr);
+                    update_nh = true;
+                } else {
+
+                    addr = v6_addr;
+                    update_nh = true;
+                }
+            }
         }
     } else if (nlri->afi == BgpAf::IPv6) {
         if (nlri->safi == BgpAf::Unicast) {
@@ -2061,12 +2076,22 @@ BgpAttrPtr BgpPeer::GetMpNlriNexthop(BgpMpNlri *nlri, BgpAttrPtr attr) {
         } else if (nlri->safi == BgpAf::Vpn) {
             Ip6Address::bytes_type bt = { { 0 } };
             size_t rdsize = RouteDistinguisher::kSize;
-            copy(nlri->nexthop.begin() + rdsize,
-                nlri->nexthop.begin() + rdsize + sizeof(bt), bt.begin());
-            Ip6Address v6_addr(bt);
-            if (v6_addr.is_v4_mapped()) {
-                addr = Address::V4FromV4MappedV6(v6_addr);
-                update_nh = true;
+            for (int idx = 0; idx < 2; ++idx) {
+                if ((idx + 1) * (rdsize + sizeof(bt)) > nlri->nexthop.size())
+                    break;
+                copy(nlri->nexthop.begin() + idx * (rdsize + sizeof(bt)) + rdsize,
+                    nlri->nexthop.begin() + (idx + 1) * (rdsize + sizeof(bt)), bt.begin());
+                Ip6Address v6_addr(bt);
+                if (v6_addr.is_v4_mapped()) {
+                    addr = Address::V4FromV4MappedV6(v6_addr);
+                    update_nh = true;
+                    break;
+                }
+                if (!v6_addr.is_link_local()) {
+                    addr = v6_addr;
+                    update_nh = true;
+                    break;
+                }
             }
         }
     }
